@@ -1,0 +1,161 @@
+name: Build SariMakeup 3D APK
+
+# Syarat: file index.html (game) ada di halaman utama repo, sejajar dengan README.md
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cek index.html
+        run: |
+          test -f index.html || (echo "index.html belum ada di halaman utama repo" && exit 1)
+
+      - name: Buat project Android
+        run: |
+          mkdir -p $(dirname settings.gradle.kts)
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "SariMakeup"
+          include(":app")
+          EOF
+          mkdir -p $(dirname build.gradle.kts)
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.5.2" apply false
+              id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          EOF
+          mkdir -p $(dirname gradle.properties)
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g
+          android.useAndroidX=true
+          EOF
+          mkdir -p $(dirname app/build.gradle.kts)
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.zuhud.sarimakeup"
+              compileSdk = 34
+              defaultConfig {
+                  applicationId = "com.zuhud.sarimakeup"
+                  minSdk = 24
+                  targetSdk = 34
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          EOF
+          mkdir -p $(dirname app/src/main/AndroidManifest.xml)
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <application
+                  android:label="SariMakeup"
+                  android:icon="@android:drawable/ic_menu_gallery"
+                  android:hardwareAccelerated="true"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          mkdir -p $(dirname app/src/main/java/com/zuhud/sarimakeup/MainActivity.kt)
+          cat > app/src/main/java/com/zuhud/sarimakeup/MainActivity.kt <<'EOF'
+          package com.zuhud.sarimakeup
+
+          import android.annotation.SuppressLint
+          import android.app.Activity
+          import android.os.Bundle
+          import android.view.View
+          import android.webkit.WebView
+
+          class MainActivity : Activity() {
+              private lateinit var web: WebView
+
+              @SuppressLint("SetJavaScriptEnabled")
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  web = WebView(this)
+                  web.settings.javaScriptEnabled = true
+                  web.settings.domStorageEnabled = true
+                  web.setBackgroundColor(0xFF3D0A2A.toInt())
+                  setContentView(web)
+                  web.loadUrl("file:///android_asset/index.html")
+              }
+
+              @Suppress("DEPRECATION")
+              @Deprecated("Deprecated in Java")
+              override fun onBackPressed() {
+                  web.evaluateJavascript("back()") { r ->
+                      if (r != null && r.contains("exit")) finish()
+                  }
+              }
+
+              @Suppress("DEPRECATION")
+              override fun onWindowFocusChanged(hasFocus: Boolean) {
+                  super.onWindowFocusChanged(hasFocus)
+                  if (hasFocus) {
+                      window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
+                          View.SYSTEM_UI_FLAG_FULLSCREEN or
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  }
+              }
+          }
+          EOF
+
+      - name: Pasang game dan three.js
+        run: |
+          mkdir -p app/src/main/assets
+          cp index.html app/src/main/assets/index.html
+          curl -fL https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js -o app/src/main/assets/three.min.js || curl -fL https://unpkg.com/three@0.128.0/build/three.min.js -o app/src/main/assets/three.min.js
+          ls -la app/src/main/assets
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk SariMakeup3D.apk
+          gh release create "sm3d-v${{ github.run_number }}" SariMakeup3D.apk --title "SariMakeup 3D (build ${{ github.run_number }})" --notes "APK siap diinstall. Android 7+."
